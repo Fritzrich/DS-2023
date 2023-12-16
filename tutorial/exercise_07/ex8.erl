@@ -1,15 +1,12 @@
 -module(ex8).
--export([echo/1, collector/2, start/0, pipeline/2]).
+-export([echo/0, collector/2, start/0, pipeline/2]).
 
-echo(List) ->
-    lists:foreach(
-        fun(Msg) ->
-            io:format("~p ", [Msg])
-        end, List),
+echo() ->
     receive
         {list, ListFromCollector} ->
+            io:format("I have received something~n"),
             io:format("Echo: Received list from collector: ~p~n", [ListFromCollector]),
-            echo(ListFromCollector);
+        echo();
         stop -> ok
     end.
 
@@ -20,11 +17,13 @@ collector(To, List) ->
             collector(To, []);
         {Msg} ->
             NewList = List ++ [Msg],
-            io:format("Collector: Adding to list: {~p\n}", [Msg]),
-            io:format("{~p~n}", [NewList]),
+            io:format("Collector: Adding to list: {~p}\n", [Msg]),
+            io:format("~p~n\n", [NewList]),
             collector(To, NewList);
         {setsender, Pid} ->
-            Pid ! {list, List},  % Send the list to the sender
+            io:format("Sending To: {~p}\n" , [Pid]),
+            Pid ! {list, List},  % Send the list to Echo
+            io:format("SenT To Echo\n"),
             collector(To, List);
         _ -> collector(To, List)
     end.
@@ -41,14 +40,19 @@ pipeline(To, Forward) ->
             To ! {reset};
         {setsender, Pid} ->
             To ! {setsender, Pid},
-            pipeline(Pid, Forward);
+            pipeline(To, Forward);
         _ ->
             pipeline(To, Forward)
     end.
 
 start() ->
-    Echo = spawn(?MODULE, echo, [[]]),
-
+    Echo = spawn(?MODULE, echo, []),
+    case is_process_alive(Echo) of
+        true ->
+            io:format("Echo process is alive.~n");
+        false ->
+            io:format("Echo process is not alive.~n")
+        end,
     C = spawn(?MODULE, collector, [Echo, []]),  % Fix this line
 
     P2 = spawn(?MODULE, pipeline, [C, false]),
@@ -86,8 +90,16 @@ start() ->
     P2 ! {filter, 115},
     P2 ! {filter, 191},
     P2 ! {filter, 33},
-    P2 ! {filter, reset},
+
+    case is_process_alive(Echo) of
+            true ->
+                io:format("Echo process is alive.~n");
+            false ->
+                io:format("Echo process is not alive.~n")
+            end,
+
     P2 ! {setsender, Echo},
+    P2 ! {filter, reset},
     Echo ! stop,
 
     ok.
