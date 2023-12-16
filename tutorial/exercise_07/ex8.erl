@@ -100,6 +100,5 @@ start() ->
 
     P2 ! {setsender, Echo},
     P2 ! {filter, reset},
-    Echo ! stop,
 
     ok.
