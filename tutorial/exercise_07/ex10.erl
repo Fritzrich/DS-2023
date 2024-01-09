@@ -1,11 +1,11 @@
 -module(ex10).
--export([start/1, clock/4, get_time/1, ticker/2, pause_clock/1, resume_clock/1, timer/2, start_timer/2, time_server/1, time_server_loop/2]).
+-export([start/1, clock/4, get_time/1, ticker/2, pause_clock/1, resume_clock/1, timer/2, start_timer/2, time_server/1, time_server_loop/2, client/2, client_loop/3, adjuster/0]).
 
 start(Speed) ->
-  Clock_Pid = spawn(fun() -> clock(0, Speed, self(), running) end),
-  TickerPid = spawn(fun() -> ticker(Clock_Pid, Speed) end),
-  Clock_Pid ! {set_Ticker, TickerPid},
-  Clock_Pid.
+  ClockPid = spawn(fun() -> clock(0, Speed, self(), running) end),
+  TickerPid = spawn(fun() -> ticker(ClockPid, Speed) end),
+  ClockPid ! {set_Ticker, TickerPid},
+  ClockPid.
 
 ticker(ClockPid, Speed) ->
   ClockPid ! {tick, self()},
@@ -28,8 +28,8 @@ clock(Current, Speed, TickerPid, Status) ->
     {get, Pid} ->
       LocalTime2 = Current,
       {MegaSecs, Secs, MicroSecs} = erlang:timestamp(),
+      Cutc = MegaSecs * 1000000 + Secs + MicroSecs / 1000000,
       LocalTime3 = Current + Speed,
-      Cutc = {MegaSecs, Secs, MicroSecs},
       Pid ! {clock, {LocalTime2, LocalTime3, Cutc}},
       clock(Current, Speed, TickerPid, Status);
     pause ->
@@ -69,8 +69,11 @@ timer(Ticks, Func) ->
   end.
 
 time_server(Speed) ->
-  ClockPid = start(Speed),
-  spawn(fun() -> time_server_loop(ClockPid, []) end).
+  ClockPid = spawn(fun() -> clock(0, Speed, self(), running) end),
+  TickerPid = spawn(fun() -> ticker(ClockPid, Speed) end),
+  ClockPid ! {set_Ticker, TickerPid},
+  ServerPid = spawn(fun() -> time_server_loop(ClockPid, []) end),
+  ServerPid.
 
 time_server_loop(ClockPid, State) ->
   receive
@@ -78,30 +81,78 @@ time_server_loop(ClockPid, State) ->
       Pid ! {time_server_state, State},
       time_server_loop(ClockPid, State);
     {get, Pid} ->
-        time = ClockPid ! {get, self()},
-        Pid ! {time},
-        time_server_loop(ClockPid, State);
+      ClockPid ! {get, self()},
+      receive
+        {clock, {T2, T3, Cutc}} ->
+          Pid ! {T2, T3, Cutc},
+          time_server_loop(ClockPid, State)
+      end;
     _Other ->
       io:format("Unknown message received by Time Server.~n"),
       time_server_loop(ClockPid, State)
   end.
 
-client() ->
-  spawn(fun() -> client_loop(ClockPid, []) end),
+client(Speed, TimeServerPid) ->
+  ClockPid = spawn(fun() -> clock(0, Speed, self(), running) end),
+  TickerPid = spawn(fun() -> ticker(ClockPid, Speed) end),
+  ClockPid ! {set_Ticker, TickerPid},
+  ClientPid = spawn(fun() -> client_loop(TimeServerPid, ClockPid, []) end),
+  io:format("Adjustment started ~p~n", [ClientPid]),
+  ClientPid.
 
-client_loop(LocalTime, ) ->
+client_loop(TimeServerPid, ClockPid, State) ->
   receive
     show ->
-      io:format("Client State: ~p~n", [State]), % Add your client state here
-      client_loop();
+      io:format("Client State: ~p~n", [State]),
+      client_loop(TimeServerPid, ClockPid, State);
     adjust ->
-        LocalTime = erlang:localtime(),
-        {MegaSecs, Secs, MicroSecs} = erlang:timestamp(),
-        CutcBeforeAdjustment = {MegaSecs, Secs, MicroSecs},
-  
-        TimeServerPid ! {adjust, self()},
+
+      TimeServerPid ! {get, self()},
+      ClockPid ! {get, self()},
+      receive
+        {T2, T3, Cutc} ->
+
+          T1 = 0,
+          T4 = 0,
+          ClockPid ! {set, (T2 - T1 + T4 - T3) / 2 + Cutc},
+          AdjustedTime = (T2 - T1 + T4 - T3) / 2 + Cutc,
+          io:format("Adjusted Time: ~p~n", [AdjustedTime]),
+          client_loop(TimeServerPid, ClockPid, State)
+      end;
     _Other ->
-      io:format("Unknown message received by Client.~n"),
-      client_loop()
+      client_loop(TimeServerPid, ClockPid, State)
   end.
+
+adjuster() ->
+
+  ClockPidServer = spawn(fun() -> clock(0, 1, self(), running) end),
+  TickerPidServer = spawn(fun() -> ticker(ClockPidServer, 1) end),
+  ClockPidServer ! {set_Ticker, TickerPidServer},
+  ServerPid = spawn(fun() -> time_server_loop(ClockPidServer, []) end),
+
+
+  ClockPidClient1 = spawn(fun() -> clock(2000, 2, self(), running) end),
+  TickerPidClient1 = spawn(fun() -> ticker(ClockPidClient1, 1) end),
+  ClockPidClient1 ! {set_Ticker, TickerPidClient1},
+  ClientPid1 = spawn(fun() -> client_loop(ServerPid, ClockPidClient1, []) end),
+
+
+  ClockPidClient2 = spawn(fun() -> clock(0, 1, self(), running) end),
+  TickerPidClient2 = spawn(fun() -> ticker(ClockPidClient2, 1) end),
+  ClockPidClient2 ! {set_Ticker, TickerPidClient2},
+  ClientPid2 = spawn(fun() -> client_loop(ServerPid, ClockPidClient2, []) end),
+
+
+  ClockPidClient3 = spawn(fun() -> clock(1000, 0.0001, self(), running) end),
+  TickerPidClient3 = spawn(fun() -> ticker(ClockPidClient3, 1) end),
+  ClockPidClient3 ! {set_Ticker, TickerPidClient3},
+  ClientPid3 = spawn(fun() -> client_loop(ServerPid, ClockPidClient3, []) end),
+
+  io:format("Adjustment started ~n"),
+  ClientPid1 ! adjust,
+  ClientPid2 ! adjust,
+  ClientPid3 ! adjust.
+
+
+  
 
