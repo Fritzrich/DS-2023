@@ -1,10 +1,12 @@
 -module(ex11).
--export([rpc/2, create_process/1, append_to_list/1, higherPids/2, lowerPids/2, process/2, setup/0]).
+-export([rpc/2, create_process/1, append_to_list/1, higherPids/2, lowerPids/2, process/2, setup/0, send_set_coordinator_messages/2, send_elections/2]).
 
 rpc(Pid, Request) ->
-    Pid ! {self(), Request},
+    io:format("sending RPC to : ~p~n", [Pid]),
+    Pid ! Request,
     receive
         {Pid, Response} ->
+            io:format("I received: ~p~n", [Response]),
             Response
     after 250 ->
         unreachable
@@ -35,43 +37,28 @@ process(ProcessList, Coordinator) ->
         {setProcessList, NewProcessList} ->
             io:format("new List: ~p~n", [NewProcessList]),
             process(NewProcessList, Coordinator);
+
         {setCoordinator, NewCoordinator} ->
+            io:format("new Coordinator: ~p~n", [NewCoordinator]),
             process(ProcessList, NewCoordinator);
+
         {getElection, Pid} ->
+            io:format("I have received an election from: ~p~n", [Pid]),
             Pid ! {ok},
             HigherProcesses = higherPids(self(), ProcessList),
             case HigherProcesses of
                 [] ->
                     % No higher PIDs, become the new coordinator
                     io:format("I am the new coordinator: ~p~n", [self()]),
-                    lists:foreach(fun(Proc) -> rpc(Proc, {setCoordinator, self()}) end, ProcessList),
-                    % Exit the process
+                    send_set_coordinator_messages(ProcessList, self()), % Send messages to other processes
                     process(ProcessList, Coordinator);
+
                 _ ->
                     % Wait for responses from higher PIDs
-                    case lists:any(
-                             fun(Proc) ->
-                                 case rpc(Proc, {getElection, self()}) of
-                                     {ok} ->
-                                         % One process returned {ok}, exit immediately
-                                         exit(ok);
-                                     _ ->
-                                         false
-                                 end
-                             end,
-                             HigherProcesses
-                         ) of
-                        true ->
-                            % One process returned {ok}, exit immediately
-                            process(ProcessList, Coordinator);
-                        false ->
-                            % No process returned {ok}, become the new coordinator
-                            io:format("Timeout reached. I am the new coordinator: ~p~n", [self()]),
-                            lists:foreach(fun(Proc) -> rpc(Proc, {setCoordinator, self()}) end, ProcessList),
-                            % Exit the process
-                            process(ProcessList, Coordinator)
-                    end
+                    send_elections(HigherProcesses, ProcessList),
+                    process(ProcessList, Coordinator)
             end;
+
         {startElection} ->
             SelfPid = self(),
             io:format("Self PID: ~p~n", [SelfPid]),
@@ -82,42 +69,57 @@ process(ProcessList, Coordinator) ->
                 [] ->
                     % No higher PIDs, become the new coordinator
                     io:format("I am the new coordinator: ~p~n", [self()]),
-                    lists:foreach(fun(Proc) -> rpc(Proc, {setCoordinator, self()}) end, ProcessList),
-                    % Exit the process
+                    send_set_coordinator_messages(ProcessList, self()), % Send messages to other processes
                     process(ProcessList, Coordinator);
+
                 _ ->
                     % Wait for responses from higher PIDs
-                    case lists:any(
-                             fun(Proc) ->
-                                 case rpc(Proc, {getElection, self()}) of
-                                     {ok} ->
-                                         % One process returned {ok}, exit immediately
-                                         exit(ok);
-                                     _ ->
-                                         false
-                                 end
-                             end,
-                             HigherProcesses
-                         ) of
-                        true ->
-                            % One process returned {ok}, exit immediately
-                            process(ProcessList, Coordinator);
-                        false ->
-                            % No process returned {ok}, become the new coordinator
-                            io:format("Timeout reached. I am the new coordinator: ~p~n", [self()]),
-                            lists:foreach(fun(Proc) -> rpc(Proc, {setCoordinator, self()}) end, ProcessList),
-                            % Exit the process
-                            process(ProcessList, Coordinator)
-                    end
+                    send_elections(HigherProcesses, ProcessList),
+                    process(ProcessList, Coordinator)
             end
     end.
+
+send_elections([], _) ->
+    ok;
+
+send_elections([Proc | Rest], ProcessList) ->
+    io:format("my name is: ~p~n", [self()]),
+    case rpc(Proc, {getElection, self()}) of
+        {ok} ->
+            ok;
+
+        unreachable ->
+            % Process didn't respond in time (unreachable)
+            send_elections(Rest, ProcessList)
+    end.
+
+send_set_coordinator_messages([], _) ->
+    ok;
+
+send_set_coordinator_messages([Proc | Rest], Coordinator) ->
+    Proc ! {setCoordinator, Coordinator},
+    send_set_coordinator_messages(Rest, Coordinator).
 
 setup() ->
     List = spawn(fun() -> append_to_list([]) end),
     Process1 = create_process(List),
     Process2 = create_process(List),
     Process3 = create_process(List),
-    
-    timer:sleep(500),  
-    % Start an election from Process1 (you can choose a different process if needed)
-    Process1 ! {startElection}.
+
+    timer:sleep(500),
+
+    Process1 ! {startElection},
+
+    exit(Process3, kill),
+
+    timer:sleep(500),
+
+    Process2 ! {startElection},
+
+    NewProcess1 = create_process(List),
+    NewProcess2 = create_process(List),
+
+    timer:sleep(500),
+
+    NewProcess1 ! {startElection}.
+
